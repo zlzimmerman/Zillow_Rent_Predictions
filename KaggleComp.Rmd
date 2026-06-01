@@ -1,0 +1,789 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(car)
+library(lm.beta)
+library(psych)
+library(Metrics)
+library(cowplot)
+library(ranger)
+library(rpart)
+library(rpart.plot)
+library(caret)
+library("tidyr")
+
+```
+#### Import Data
+```{r}
+train = read.csv('1_train.csv')
+test = read.csv('2_test.csv')
+```
+
+
+
+#### Sample Submission
+```{r}
+# ensure train.csv and test.csv are in your working directory
+
+# following code will read data and construct a simple model
+train = read.csv('1_train.csv')
+model = lm(rent ~ square_feet, train)
+
+# read in test data and apply model to generate predictions
+test = read.csv('2_test.csv')
+pred = predict(model, newdata=test)
+
+# construct submission from predictions
+submissionFile = data.frame(id = test$id, rent = pred)
+write.csv(submissionFile, 'sample_submission.csv', row.names = F)
+
+```
+
+
+#### Analyzing Data
+```{r}
+pairs.panels(select(train, bedrooms, bathrooms, square_feet, rent), 
+             ellipses = F,
+             lm = T)
+```
+
+```{r}
+str(train)
+summary(train)
+
+```
+#### Cleaning Data 
+```{r}
+num_nas_df = sapply(train, function(x) sum(is.na(x))) 
+num_nas_df[num_nas_df> 0] |> print()
+```
+
+```{r}
+## Replacing all NA's with the mean from the column
+train$bedrooms[is.na(train$bedrooms)] <- mean(train$bedrooms, na.rm = TRUE)
+train$bathrooms[is.na(train$bathrooms)] <- mean(train$bathrooms, na.rm = TRUE)
+test$bedrooms[is.na(test$bedrooms)] <- mean(test$bedrooms, na.rm = TRUE)
+test$bathrooms[is.na(test$bathrooms)] <- mean(test$bathrooms, na.rm = TRUE)
+test$longitude[is.na(test$longitude)] <- mean(test$longitude, na.rm = TRUE)
+test$latitude[is.na(test$latitude)] <- mean(test$latitude, na.rm = TRUE)
+train$longitude[is.na(train$longitude)] <- mean(train$longitude, na.rm = TRUE)
+train$latitude[is.na(train$latitude)] <- mean(train$latitude, na.rm = TRUE)
+```
+
+
+```{r}
+## Ensuring columns containing nulls no longer have any
+colSums(is.na(test))
+colSums(is.na(train))
+```
+
+
+
+#### Submission 1 
+
+For this submisson, I used a basic linear regression model using 3 columns as reference (bedrooms, bathrooms, and square_feet) to create a baseline score for my following submissions. This model scored a 514, indicating that it has a weak performance in predicting rent. For Submission 2, I tried using the same factors in a stepwise regression model that recieved the same score as my submission 1, indicating these two model types create similar accuracy.
+```{r}
+model2 = lm(rent ~ bedrooms + bathrooms + square_feet, data = train)
+pred2 = predict(model2, newdata= test)
+```
+
+```{r}
+submissionFile <- data.frame(id = test$id, rent = pred2)
+write.csv(submissionFile, 'submission1.csv', row.names = FALSE)
+```
+#### Submission 3
+
+Trying a backward stepwise regression model while also including latitude and longitude
+
+For my submission 3, I used a stepwise regression model and added my longitude and latitude. For all of these columns, I replaced the missing values with the mean of that column. This increased my score slightly to 504, indicating that the addition of longitude and latitude helped my model slightly but not much. By this point I felt that linear regression and stepwise regression may have been having a hard time generalizing to create accurate predictions on my test set.
+```{r}
+model4a <- lm(rent ~ bedrooms + bathrooms + square_feet + longitude + latitude, data = train)
+
+model4 <- step(model4a)
+pred4 <- predict(model4, newdata = test)
+
+submissionFile3 <- data.frame(id = test$id, rent = pred3)
+write.csv(submissionFile3, 'submission3.csv', row.names = FALSE)
+
+```
+
+
+#### Submission 4
+Using ranger random forest regression model
+
+For my 4th submission, I switched to a random forest model to access the accuracy of this model type. To have a good baseline comparison, I kept all the factors that my model was trained on the same as submission 3 so that I could see if the model itself provided a significant difference. This submission scored a 191, jumping significantly from the stepwise regressions score of 504. With this information I decided that random forest was the most reliable model type and chose to stick with it through the rest of my submissions.
+```{r}
+model5 <- 
+  ranger(rent~ bedrooms + bathrooms + square_feet + longitude + latitude, data = train)
+```
+
+```{r}
+pred5 <- predict(model5, data=train)$predictions
+
+mae(train$rent, pred5)
+```
+
+```{r}
+pred5test <- predict(model5, data = test)$predictions
+```
+
+```{r}
+submissionFile <- data.frame(id = test$id, rent = pred5test)
+write.csv(submissionFile, 'submission4.csv', row.names = FALSE)
+```
+
+#### More Cleaning
+
+```{r}
+# Converting all relevant chr to factors
+train$pets_allowed <- as.factor(train$pets_allowed)
+train$state <- as.factor(train$state)
+train$fee <- as.factor(train$fee)
+train$has_photo <- as.factor(train$has_photo)
+train$source <- as.factor(train$source)
+test$pets_allowed <- as.factor(test$pets_allowed)
+test$state <- as.factor(test$state)
+test$fee <- as.factor(test$fee)
+test$has_photo <- as.factor(test$has_photo)
+test$source <- as.factor(test$source)
+```
+
+```{r}
+# Converting amentities from chr to a count of the amount of amenities in each listing
+train$num_amenities <- sapply(strsplit(as.character(train$amenities), ","), length)
+test$num_amenities <- sapply(strsplit(as.character(test$amenities), ","), length)
+```
+
+
+#### Submission 5
+
+In an attempt to improve my accuracy, I decided to revisit my cleaning process and see if further cleaning the data would result in a more accurate model. I chose to convert all character columns to factors so that I could use them in my model. I also converted my amenities column to "num_amenitites" where I counted the number of amenities in each column and listed a count of them. This was to see if there was a correlation between the number of amenities and the rental prices. With this cleaning I kept my base ranger model and added pets_allowed, state, fee, has_photo, source, and num_amenities. With all these factors added, my score went down slightly to 193. 
+```{r}
+model6 <- ranger(rent ~ bedrooms + bathrooms + square_feet + longitude + latitude + pets_allowed + state + fee + has_photo + source + num_amenities, data = train, importance = "impurity")
+
+```
+
+```{r}
+pred6train <- predict(model6, data=train)$predictions
+
+mae(train$rent, pred6train)
+```
+
+```{r}
+pred6 <- predict(model6, data = test)$predictions
+```
+
+```{r}
+submissionFile <- data.frame(id = test$id, rent = pred6)
+write.csv(submissionFile, 'submission5.csv', row.names = FALSE)
+```
+
+```{r}
+importance(model6)
+
+```
+#### Submission 6
+
+For submission 6, I tested out adding parameters to my random forest model to see if that would result in a more accurate model. I chose base params like num.trees, mtry, min.node.size, and sample.fraction. With these params added, my score increased to 183, which was a slight improvement on the same model without parameters. 
+
+```{r}
+model7 <- ranger(
+  rent ~ bedrooms + bathrooms + square_feet + longitude + latitude + pets_allowed + state + fee + has_photo + source + num_amenities,
+  data = train,
+  num.trees = 1500,
+  mtry = 4,
+  min.node.size = 4,
+  sample.fraction = 0.8,
+  importance = "impurity",
+  respect.unordered.factors = "order",
+  seed = 25
+)
+
+```
+
+```{r}
+# Checking MAE
+pred7train <- predict(model7, data=train)$predictions
+
+mae(train$rent, pred7train)
+
+pred7test <- predict(model7, data=test)$predictions
+
+```
+```{r}
+submissionFile <- data.frame(id = test$id, rent = pred7test)
+write.csv(submissionFile, 'submission6.csv', row.names = FALSE)
+```
+
+
+#### Different Cleaning
+
+```{r}
+#Instead of replacing null values with mean, group the columns by state (since it was deemed one of the more important rent factors) and then find the median value of each column (median bc it does a better job ruling out outliers) and replace the null values with those median values
+train <- train %>%
+  group_by(state) %>%
+  mutate(
+    bedrooms = ifelse(is.na(bedrooms), median(bedrooms, na.rm = TRUE), bedrooms),
+    bathrooms = ifelse(is.na(bathrooms), median(bathrooms, na.rm = TRUE), bathrooms),
+    longitude = ifelse(is.na(longitude), median(longitude, na.rm = TRUE), longitude),
+    latitude = ifelse(is.na(latitude), median(latitude, na.rm = TRUE), latitude)
+  ) %>%
+  ungroup()
+
+test <- test %>%
+  group_by(state) %>%
+  mutate(
+    bedrooms = ifelse(is.na(bedrooms), median(bedrooms, na.rm = TRUE), bedrooms),
+    bathrooms = ifelse(is.na(bathrooms), median(bathrooms, na.rm = TRUE), bathrooms),
+    longitude = ifelse(is.na(longitude), median(longitude, na.rm = TRUE), longitude),
+    latitude = ifelse(is.na(latitude), median(latitude, na.rm = TRUE), latitude)
+  ) %>%
+  ungroup()
+
+```
+
+#### Submission 7
+
+
+```{r}
+#Same model as the last one, but with new cleaning
+#^^ tested and came out with very similar mae, so tweaked the numbers a little bit
+model8 <- ranger(
+  rent ~ bedrooms + bathrooms + square_feet + longitude + latitude + pets_allowed + state + fee + has_photo + source + num_amenities,
+  data = train,
+  num.trees = 1200,
+  mtry = 6,
+  min.node.size = 4,
+  sample.fraction = 0.8,
+  importance = "impurity",
+  respect.unordered.factors = "order",
+  seed = 25
+)
+```
+```{r}
+pred8train <- predict(model8, data=train)$predictions
+
+mae(train$rent, pred8train)
+
+pred8test <- predict(model8, data=test)$predictions
+```
+
+```{r}
+submissionFile <- data.frame(id = test$id, rent = pred8test)
+write.csv(submissionFile, 'submission7.csv', row.names = FALSE)
+```
+
+```{r}
+model8$variable.importance |> sort()
+```
+#### Submission 8
+```{r}
+#Trying using all the data at risk of overfitting
+model9 <- ranger(
+  rent ~ bedrooms + bathrooms + square_feet + longitude + latitude + pets_allowed + state + fee + has_photo + source + num_amenities,
+  data = train,
+  num.trees = 1200,
+  mtry = 6,
+  min.node.size = 4,
+  importance = "impurity",
+  respect.unordered.factors = "order",
+  seed = 25
+)
+```
+```{r}
+pred9train <- predict(model9, data=train)$predictions
+
+mae(train$rent, pred9train)
+
+pred9test <- predict(model9, data=test)$predictions
+```
+
+```{r}
+submissionFile <- data.frame(id = test$id, rent = pred9test)
+write.csv(submissionFile, 'submission8.csv', row.names = FALSE)
+```
+
+#### Submission 9
+
+```{r}
+#Backing up and using caret to find the best params using cross validation grid method instead of guessing
+ctrl <- trainControl(method = "cv", number = 5)
+grid <- expand.grid(
+  mtry = c(3, 5, 7),
+  splitrule = c("variance", "extratrees"),
+  min.node.size = c(1, 5, 10)
+)
+
+#5 * 3 * 2 * 3 params = 90 total models tested
+
+model10 <- train(
+  rent ~ bedrooms + bathrooms + square_feet + longitude + latitude + pets_allowed + state + fee + has_photo + source + num_amenities,
+  data = train,
+  method = "ranger",
+  trControl = ctrl,
+  tuneGrid = grid,
+  num.trees = 1000,
+  importance = "impurity",
+  seed = 25
+)
+
+```
+
+```{r}
+#viewing the best params
+model10$results
+
+model10$bestTune
+```
+
+```{r}
+pred10train <- predict(model10, newdata = train)
+
+mae(train$rent, pred10train)
+
+pred10test <- predict(model10, newdata = test)
+
+#Must have picked bad params to test out-- bad mae :(
+```
+
+```{r}
+submissionFile <- data.frame(id = test$id, rent = pred10test)
+write.csv(submissionFile, 'submission9.csv', row.names = FALSE)
+```
+
+
+####MORE Cleaning
+
+```{r}
+#I think there might be too much noise in the dataset-- looking at boxplots to visually see outliers
+boxplot(train$square_feet, main = "Square Feet")
+boxplot(train$bedrooms, main = "Bedrooms")
+boxplot(train$bathrooms, main = "Bathrooms")
+
+```
+```{r}
+#Based on the boxplots I dont see any significant lower outliers, so just focused on upper outliers
+#Trying it with the upper 1%, will adjust if it doesnt take out enough of the outliers but I don't want to significantly cut down the dataset
+
+
+#Calculating the upper limit and then creating a function, upper_outliers, to apply the upper limit of x to the columns
+upper_outliers <- function(x, upper_quantile = 0.99) {
+  upper_limit <- quantile(x, upper_quantile, na.rm = TRUE)
+  return(x <= upper_limit)
+}
+```
+
+```{r}
+train <- train[
+  upper_outliers(train$square_feet) &
+  upper_outliers(train$bedrooms) &
+  upper_outliers(train$bathrooms),
+]
+
+```
+
+```{r}
+#Removed about 750 rows
+str(train)
+```
+
+#### Submission 10
+
+```{r}
+#Using the model params from submission 8 as it has the best MAE so far
+model10 <- ranger(
+  rent ~ bedrooms + bathrooms + square_feet + longitude + latitude + pets_allowed + state + fee + has_photo + source + num_amenities,
+  data = train,
+  num.trees = 1200,
+  mtry = 6,
+  min.node.size = 4,
+  importance = "impurity",
+  respect.unordered.factors = "order",
+  seed = 25
+)
+```
+
+```{r}
+pred10train <- predict(model10, data=train)$predictions
+
+mae(train$rent, pred10train)
+
+pred10test <- predict(model10, data=test)$predictions
+```
+
+```{r}
+submissionFile <- data.frame(id = test$id, rent = pred10test)
+write.csv(submissionFile, 'submission10.csv', row.names = FALSE)
+```
+
+
+
+#### Cleaning Combined
+
+```{r}
+#Adding all my cleaning steps into one spot so I dont have to scroll to clean in the right order
+train <- train %>%
+  group_by(state) %>%
+  mutate(
+    bedrooms = ifelse(is.na(bedrooms), median(bedrooms, na.rm = TRUE), bedrooms),
+    bathrooms = ifelse(is.na(bathrooms), median(bathrooms, na.rm = TRUE), bathrooms),
+    longitude = ifelse(is.na(longitude), median(longitude, na.rm = TRUE), longitude),
+    latitude = ifelse(is.na(latitude), median(latitude, na.rm = TRUE), latitude)
+  ) %>%
+  ungroup()
+
+test <- test %>%
+  group_by(state) %>%
+  mutate(
+    bedrooms = ifelse(is.na(bedrooms), median(bedrooms, na.rm = TRUE), bedrooms),
+    bathrooms = ifelse(is.na(bathrooms), median(bathrooms, na.rm = TRUE), bathrooms),
+    longitude = ifelse(is.na(longitude), median(longitude, na.rm = TRUE), longitude),
+    latitude = ifelse(is.na(latitude), median(latitude, na.rm = TRUE), latitude)
+  ) %>%
+  ungroup()
+
+train$pets_allowed <- as.factor(train$pets_allowed)
+train$state <- as.factor(train$state)
+train$fee <- as.factor(train$fee)
+train$has_photo <- as.factor(train$has_photo)
+train$source <- as.factor(train$source)
+test$pets_allowed <- as.factor(test$pets_allowed)
+test$state <- as.factor(test$state)
+test$fee <- as.factor(test$fee)
+test$has_photo <- as.factor(test$has_photo)
+test$source <- as.factor(test$source)
+
+train$num_amenities <- sapply(strsplit(as.character(train$amenities), ","), length)
+test$num_amenities <- sapply(strsplit(as.character(test$amenities), ","), length)
+
+upper_outliers <- function(x, upper_quantile = 0.99) {
+  upper_limit <- quantile(x, upper_quantile, na.rm = TRUE)
+  return(x <= upper_limit)
+}
+
+train <- train[
+  upper_outliers(train$square_feet) &
+  upper_outliers(train$bedrooms) &
+  upper_outliers(train$bathrooms),
+]
+
+```
+
+#### Log Transformation
+```{r}
+# Trying to take the log of sqft since it is skewed
+train$log_sqft <- log(train$square_feet)
+test$log_sqft <- log(test$square_feet)
+train$log_rent <- log(train$rent)
+
+```
+
+
+#### Submission 11
+```{r}
+model11 <- ranger(
+  log_rent ~ bedrooms + bathrooms + log_sqft + longitude + latitude + pets_allowed + state + fee + has_photo + source + num_amenities,
+  data = train,
+  num.trees = 1200,
+  mtry = 6,
+  min.node.size = 4,
+  importance = "impurity",
+  respect.unordered.factors = "order",
+  seed = 25
+)
+```
+```{r}
+model11$variable.importance |> sort()
+```
+
+
+```{r}
+pred11trainlog <- predict(model11, data = train)$predictions
+pred11train <- exp(pred11trainlog)
+mae(train$rent, pred11train)
+
+
+pred11testlog <- predict(model11, data=test)$predictions
+pred11test <- exp(pred11testlog)
+
+summary(pred11trainlog)
+
+```
+
+```{r}
+submissionFile <- data.frame(id = test$id, rent = pred11test)
+write.csv(submissionFile, 'submission11.csv', row.names = FALSE)
+```
+
+#### Submission 12
+```{r}
+ctrl <- trainControl(method = "cv", number = 5)
+
+grid <- expand.grid(
+  mtry = c(6, 8, 10),
+  splitrule = "variance",
+  min.node.size = c(4, 6, 8)
+)
+
+model12 <- train(
+  log_rent ~ bedrooms + bathrooms + log_sqft + longitude + latitude + pets_allowed + state + fee + has_photo + source + num_amenities,
+  data = train,
+  method = "ranger",
+  trControl = ctrl,
+  tuneGrid = grid,
+  num.trees = 1200,
+  importance = "impurity",
+  seed = 25
+)
+
+```
+
+```{r}
+pred12trainlog <- predict(model12, newdata = train)
+pred12train <- exp(pred12trainlog)
+mae(train$rent, pred12train)
+```
+
+```{r}
+model12$results
+
+model12$bestTune
+```
+
+#### Submission 13
+```{r}
+model11 <- ranger(
+  log_rent ~ bedrooms + bathrooms + log_sqft + longitude + latitude + state + has_photo + num_amenities,
+  data = train,
+  num.trees = 1200,
+  mtry = 6,
+  min.node.size = 4,
+  importance = "impurity",
+  respect.unordered.factors = "order",
+  seed = 25
+)
+```
+
+```{r}
+pred11trainlog <- predict(model11, data = train)$predictions
+pred11train <- exp(pred11trainlog)
+mae(train$rent, pred11train)
+
+
+pred11testlog <- predict(model11, data=test)$predictions
+pred11test <- exp(pred11testlog)
+```
+```{r}
+submissionFile <- data.frame(id = test$id, rent = pred11test)
+write.csv(submissionFile, 'submission12.csv', row.names = FALSE)
+```
+
+
+#### Submission 14
+Using dummy variables for amenities
+
+```{r}
+
+# Create a row ID if you don't have one
+train <- train |> mutate(row_id = row_number())
+
+# Separate amenities into multiple rows, remove empty amenities
+df_long <- train |> 
+  separate_rows(amenities, sep = ",") |> 
+  filter(amenities != "")
+
+# Create dummy variables
+df_dummy <- df_long |> 
+  mutate(value = 1) |> 
+  pivot_wider(names_from = amenities, values_from = value, values_fill = list(value = 0))
+
+# Merge back to original data
+train_new <- train |> 
+  select(-amenities) |> 
+  left_join(df_dummy, by = "row_id")
+
+colnames(train_new) <- make.names(colnames(train_new))
+
+```
+
+```{r}
+dummy_amenities <- train_new |> select(Parking:Luxury)
+
+dummy_train <- train_new$log_rent.x
+
+```
+
+```{r}
+colnames(train_new)
+```
+
+```{r}
+model_amenities <- ranger(
+  x = dummy_amenities,
+  y = dummy_train,
+  num.trees = 500,
+  importance = "impurity",
+  seed = 25)
+
+```
+
+```{r}
+model_amenities$variable.importance |> sort()
+```
+
+```{r}
+model13 <- ranger(
+  log_rent.x ~ bedrooms.x + bathrooms.x + log_sqft.x + longitude.x + latitude.x + state.x + has_photo.x + num_amenities.x + Golf + Alarm + Doorman + Luxury + Garbage.Disposal + Basketball + Hot.Tub + Elevator + View + TV,
+  data = train_new,
+  num.trees = 1200,
+  mtry = 6,
+  min.node.size = 4,
+  importance = "impurity",
+  respect.unordered.factors = "order",
+  seed = 25
+)
+
+```
+
+```{r}
+pred13trainlog <- predict(model13, data = train_new)$predictions
+pred13train <- exp(pred13trainlog)
+mae(train$rent, pred13train)
+```
+```{r}
+test_long <- test |> 
+  separate_rows(amenities, sep = ",") |> 
+  filter(amenities != "")
+
+test_dummy <- test_long |> 
+  mutate(value = 1) |> 
+  pivot_wider(names_from = amenities, values_from = value, values_fill = list(value = 0))
+
+test_new <- test |> 
+  left_join(test_dummy, by = "id")
+
+colnames(test_new) <- make.names(colnames(test_new))
+
+```
+
+
+```{r}
+pred13testlog <- predict(model13, data=test_new)$predictions
+pred13test <- exp(pred13testlog)
+```
+
+```{r}
+submissionFile <- data.frame(id = test$id, rent = pred13test)
+write.csv(submissionFile, 'submission13.csv', row.names = FALSE)
+```
+
+
+
+#### Submission 14
+```{r}
+model13 <- ranger(
+  log_rent.x ~ bedrooms.x + bathrooms.x + log_sqft.x + longitude.x + latitude.x + state.x + has_photo.x + num_amenities.x + Alarm + Doorman + Luxury + Garbage.Disposal + Basketball + Hot.Tub + Elevator + View + TV + Cable.or.Satellite + Internet.Access + Dishwasher + Tennis + Refrigerator + AC,
+  data = train_new,
+  num.trees = 1100,
+  mtry = 6,
+  min.node.size = 4,
+  importance = "impurity",
+  respect.unordered.factors = "order",
+  seed = 25
+)
+
+```
+```{r}
+model13$variable.importance |> sort()
+```
+
+```{r}
+pred13trainlog <- predict(model13, data = train_new)$predictions
+pred13train <- exp(pred13trainlog)
+mae(train$rent, pred13train)
+```
+
+
+```{r}
+pred13testlog <- predict(model13, data=test_new)$predictions
+pred13test <- exp(pred13testlog)
+
+submissionFile <- data.frame(id = test$id, rent = pred13test)
+write.csv(submissionFile, 'submission14.csv', row.names = FALSE)
+```
+
+```{r}
+colnames(train)
+
+```
+
+#### Submission 16
+
+```{r}
+# Create df that contains categories of x and mean(rent) for each category.
+df <- train |> group_by(state) |> 
+  summarize(mean_rent = mean(rent))
+
+# Add bin_x that gives bin number for each category based on mean(rent) values
+df$bin_x <- ntile(df$mean_rent, 10)
+
+# Add bin_x column to train and test with left_join using key column = x. 
+train <- left_join(train, df[,c("state", "bin_x")], by = "state")
+test <- left_join(test, df[,c("state", "bin_x")], by = "state")
+```
+
+```{r}
+model15 <- ranger(
+  rent ~ bedrooms + bathrooms + square_feet + longitude + latitude + state + has_photo + num_amenities + bin_x,
+  data = train,
+  num.trees = 1200,
+  mtry = 6,
+  min.node.size = 4,
+  importance = "impurity",
+  respect.unordered.factors = "order",
+  seed = 25
+)
+```
+```{r}
+model15a <- ranger(
+  rent ~ bathrooms + square_feet + longitude + latitude + state + has_photo + num_amenities + bin_x,
+  data = train,
+  num.trees = 1200,
+  mtry = 6,
+  min.node.size = 4,
+  importance = "impurity",
+  respect.unordered.factors = "order",
+  seed = 25
+)
+```
+
+
+```{r}
+model15$variable.importance |> sort()
+
+```
+
+```{r}
+pred15train <- predict(model15, data=train)$predictions
+mae(train$rent, pred15train)
+
+pred15atrain <- predict(model15a, data=train)$predictions
+mae(train$rent, pred15atrain)
+pred15test <- predict(model15, data=test)$predictions
+```
+
+```{r}
+submissionFile <- data.frame(id = test$id, rent = pred15test)
+write.csv(submissionFile, 'submission15.csv', row.names = FALSE)
+```
+
